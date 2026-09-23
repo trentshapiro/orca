@@ -4,7 +4,8 @@
 // agent. Hook status is the same truth the sidebar, dashboard, and mobile rows
 // read, so stats now agree with what the user sees.
 
-import type { AgentStatusState } from '../../shared/agent-status-types'
+import { isAgentExecutionOwed } from '../../shared/agent-lead-status-fold'
+import type { AgentStatusPayload } from '../../shared/agent-status-types'
 
 /** Structural subset of the agent-hook enriched payload this module needs. */
 export type AgentSessionStatusEvent = {
@@ -17,9 +18,16 @@ export type AgentSessionStatusEvent = {
   isReplay?: boolean
   /** Nonterminal state backed only by child state restored from disk. */
   restoredUnconfirmed?: true
-  /** When the current state first appeared; preserved across same-state replays. */
+  /** When the current combined state first appeared; preserved across same-state replays. */
   stateStartedAt: number
-  payload: { state: AgentStatusState }
+  /** When this event arrived; a replay restamps it. */
+  receivedAt: number
+  /** When this evidence was first observed; survives a replay. Absent means `receivedAt`. */
+  evidenceObservedAt?: number
+  /** The combined row state, its watch-loop mode, and the lead's own state when the host is new
+   *  enough to publish one. The stats ask "was an agent executing", which the combined `state`
+   *  alone stopped answering once a settled lead's background shell could hold it `working`. */
+  payload: Pick<AgentStatusPayload, 'state' | 'workingMode' | 'lead'>
 }
 
 /** Ordinary pane teardown, or a stamped batch clear for one dropped connection. */
@@ -42,7 +50,8 @@ export type AgentSessionTransition = 'start' | 'stop' | 'none'
 export const AGENT_SESSION_MIRROR_LIMIT = 1000
 
 type MirroredSession = {
-  state: AgentStatusState
+  /** Whether the row last said an agent was executing (the lead or live agent child work). */
+  executing: boolean
   connectionId: string | null
   /** True while this recorder has an unmatched onAgentStart out to the sink. */
   open: boolean
@@ -52,33 +61,60 @@ type MirroredSession = {
  * Pure transition classifier — the whole idempotency contract lives here.
  *
  * Rules:
- * - Same state as the mirror is a SNAPSHOT, not a transition. Reconnect replay,
+ * - Same answer as the mirror is a SNAPSHOT, not a transition. Reconnect replay,
  *   disk hydration, and mid-turn tool-progress events all re-emit the current
  *   state; counting those is what makes every reconnect inflate the totals.
  * - Only a LIVE event may open a session. A replayed or disk-restored `working`
  *   describes work that began in some earlier runtime, so crediting it would
  *   mint a phantom spawn (see #14610: replays carrying an unchanged state used
  *   to re-arm live timing, and cached replays re-fire completion side effects).
+ *   A restored row's `lead` is as historical as its `state`; neither opens.
  * - Any event may CLOSE a session this recorder opened. A replayed `done` is how
  *   a client learns about a completion it missed while disconnected; refusing it
  *   would strand the session open until the quit flush.
  */
 export function classifyAgentSessionTransition(
-  previous: Pick<MirroredSession, 'state' | 'open'> | undefined,
+  previous: Pick<MirroredSession, 'executing' | 'open'> | undefined,
   event: AgentSessionStatusEvent
 ): AgentSessionTransition {
   if (event.providerSessionOnly) {
     return 'none'
   }
-  const next = event.payload.state
-  if (previous && previous.state === next) {
+  const executing = isAgentExecutionOwed(event.payload)
+  if (previous && previous.executing === executing) {
     return 'none'
   }
-  if (next === 'working') {
+  if (executing) {
     const live = event.isReplay !== true && event.restoredUnconfirmed !== true
     return live ? 'start' : 'none'
   }
   return previous?.open ? 'stop' : 'none'
+}
+
+/**
+ * The instant an execution edge happened. Each clock on the row dates one fact, and the edge
+ * belongs to whichever fact moved:
+ * - the lead's own turn started or ended: the lead's clock;
+ * - the row settled or paused with the lead: the row's clock, which moved with it;
+ * - a settled lead's child work moved the row: the row's clock when the row changed state, and
+ *   the evidence clock when only the watch-loop mode changed (a shell outliving the last
+ *   subagent moves neither state clock).
+ * A host that publishes no `lead` has only the row's clock, as before.
+ */
+export function agentExecutionEdgeAt(event: AgentSessionStatusEvent): number {
+  const { lead, state } = event.payload
+  if (!lead) {
+    return event.stateStartedAt
+  }
+  if (lead.state === 'working') {
+    return lead.stateStartedAt
+  }
+  if (state !== 'working') {
+    return event.stateStartedAt
+  }
+  return isAgentExecutionOwed(event.payload)
+    ? event.stateStartedAt
+    : (event.evidenceObservedAt ?? event.receivedAt)
 }
 
 /**
@@ -99,7 +135,8 @@ export class AgentSessionTransitionRecorder {
     }
     const previous = this.sessions.get(event.paneKey)
     const transition = classifyAgentSessionTransition(previous, event)
-    if (transition === 'none' && previous?.state === event.payload.state) {
+    const executing = isAgentExecutionOwed(event.payload)
+    if (transition === 'none' && previous?.executing === executing) {
       // Refresh recency without touching session state so a long-running pane
       // isn't evicted ahead of an idle one.
       this.touch(event.paneKey, previous)
@@ -108,15 +145,20 @@ export class AgentSessionTransitionRecorder {
 
     let open = previous?.open ?? false
     if (transition === 'start') {
-      this.sink.onAgentStart(event.paneKey, event.stateStartedAt, undefined, event.worktreeId)
+      this.sink.onAgentStart(
+        event.paneKey,
+        agentExecutionEdgeAt(event),
+        undefined,
+        event.worktreeId
+      )
       open = true
     } else if (transition === 'stop') {
-      this.sink.onAgentStop(event.paneKey, event.stateStartedAt)
+      this.sink.onAgentStop(event.paneKey, agentExecutionEdgeAt(event))
       open = false
     }
 
     this.touch(event.paneKey, {
-      state: event.payload.state,
+      executing,
       connectionId: event.connectionId,
       open
     })

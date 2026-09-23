@@ -165,3 +165,48 @@ describe('countActivityUnread working turns', () => {
     expect(countActivityUnread(makeSource({ ...entry, restoredUnconfirmed: true }), 2_000)).toBe(0)
   })
 })
+
+describe('countActivityUnread reads the combined state, not the lead fact', () => {
+  // The badge mirrors the Activity feed, which builds its rows from the combined state: a settled
+  // lead whose subagent still runs is one live working row there, and no done event exists for
+  // the lead's own finish until the row itself settles.
+  const NOW = AGENT_STATUS_STALE_AFTER_MS
+
+  it('counts a fresh row held working by a subagent as one live working turn', () => {
+    const source = makeSource(
+      makeEntry({
+        state: 'working',
+        updatedAt: NOW - 1_000,
+        stateStartedAt: NOW - 5_000,
+        lead: { state: 'done', stateStartedAt: NOW - 2_000 }
+      })
+    )
+    expect(countActivityUnread(source, NOW)).toBe(1)
+  })
+
+  it('does not count a settled lead with only a watch loop, matching the feed', () => {
+    const source = makeSource(
+      makeEntry({
+        state: 'working',
+        workingMode: 'monitoring',
+        updatedAt: NOW - 1_000,
+        stateStartedAt: NOW - 5_000,
+        lead: { state: 'done', stateStartedAt: NOW - 2_000 }
+      })
+    )
+    expect(countActivityUnread(source, NOW)).toBe(0)
+  })
+
+  it('does not count a restored row as a live turn, whatever its lead says', () => {
+    const source = makeSource(
+      makeEntry({
+        state: 'working',
+        updatedAt: NOW - 1_000,
+        stateStartedAt: NOW - 5_000,
+        restoredUnconfirmed: true,
+        lead: { state: 'working', stateStartedAt: NOW - 5_000 }
+      })
+    )
+    expect(countActivityUnread(source, NOW)).toBe(0)
+  })
+})

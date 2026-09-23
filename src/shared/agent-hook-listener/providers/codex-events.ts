@@ -22,6 +22,7 @@ import { resolvePrompt, resolveToolState } from '../prompt-fields'
 import { extractToolFields, isNewTurnEvent } from '../provider-event-routing'
 import { readString } from '../tool-input-preview'
 import {
+  codexLeadOutcomeAtEvent,
   codexLeadStatusForPayload,
   getOrCreateCodexSubagentRoster,
   getOrCreateCodexSubagentTranscriptState,
@@ -227,8 +228,10 @@ export function normalizeCodexEvent(
     stateName
   )
   const previousLead = state.codexLeadStateByPaneKey.get(paneKey)
+  const outcome = codexLeadOutcomeAtEvent(eventName, previousLead)
   setCodexLeadTurnState(state, paneKey, {
     state: ownedState,
+    ...(outcome ? { outcome } : {}),
     model:
       normalizeOptionalField(hookPayload['model'], AGENT_MODEL_MAX_LENGTH) ??
       (eventName === 'SessionStart' ? undefined : previousLead?.model)

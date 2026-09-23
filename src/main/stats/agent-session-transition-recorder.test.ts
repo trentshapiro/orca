@@ -39,9 +39,26 @@ function hook(
     paneKey: PANE,
     connectionId: null,
     stateStartedAt,
+    receivedAt: stateStartedAt,
     payload: { state },
     ...extra
   }
+}
+
+/** A row from a host that publishes the lead fact beside the combined state. */
+function leadHook(
+  row: {
+    state: AgentSessionStatusEvent['payload']['state']
+    workingMode?: 'monitoring'
+    lead: { state: AgentSessionStatusEvent['payload']['state']; stateStartedAt: number }
+  },
+  stateStartedAt: number,
+  extra: Partial<AgentSessionStatusEvent> = {}
+): AgentSessionStatusEvent {
+  return hook(row.state, stateStartedAt, {
+    payload: { state: row.state, workingMode: row.workingMode, lead: row.lead },
+    ...extra
+  })
 }
 
 function sink(): AgentSessionSink & {
@@ -211,12 +228,137 @@ describe('AgentSessionTransitionRecorder', () => {
   })
 })
 
+describe('AgentSessionTransitionRecorder reading the lead fact', () => {
+  // The stats ask "was an agent executing": the lead's own turn, or a subagent still running
+  // after the lead settled. A background shell the settled lead left behind is neither.
+  const LEAD_WORKING = { state: 'working' as const, stateStartedAt: T }
+
+  it('stops the session when the lead settles and only a watch loop holds the row working', () => {
+    const stats = new StatsCollector()
+    const recorder = new AgentSessionTransitionRecorder(stats)
+
+    recorder.onStatus(leadHook({ state: 'working', lead: LEAD_WORKING }, T))
+    // The Stop hook: the row stays `working` (same clock) in monitoring mode; the lead is done.
+    recorder.onStatus(
+      leadHook(
+        {
+          state: 'working',
+          workingMode: 'monitoring',
+          lead: { state: 'done', stateStartedAt: T + 20_000 }
+        },
+        T,
+        { receivedAt: T + 20_000 }
+      )
+    )
+    // Hours of dev server later, the shell exits and the row settles.
+    recorder.onStatus(
+      leadHook(
+        { state: 'done', lead: { state: 'done', stateStartedAt: T + 20_000 } },
+        T + 7_200_000
+      )
+    )
+
+    expect(stats.getSummary().totalAgentsSpawned).toBe(1)
+    expect(stats.getSummary().totalAgentTimeMs).toBe(20_000)
+  })
+
+  it('keeps the session open while a subagent outlives the lead, and closes it when the child settles', () => {
+    const stats = new StatsCollector()
+    const recorder = new AgentSessionTransitionRecorder(stats)
+
+    recorder.onStatus(leadHook({ state: 'working', lead: LEAD_WORKING }, T))
+    recorder.onStatus(
+      leadHook({ state: 'working', lead: { state: 'done', stateStartedAt: T + 10_000 } }, T)
+    )
+    recorder.onStatus(
+      leadHook({ state: 'done', lead: { state: 'done', stateStartedAt: T + 10_000 } }, T + 90_000)
+    )
+
+    expect(stats.getSummary().totalAgentsSpawned).toBe(1)
+    expect(stats.getSummary().totalAgentTimeMs).toBe(90_000)
+  })
+
+  it('dates the stop by the evidence when a shell outlives the last subagent', () => {
+    // Lead done at +10s, its subagent finishes at +60s, a shell keeps the row in monitoring:
+    // neither state clock moves at +60s, so the evidence clock is the edge.
+    const stats = new StatsCollector()
+    const recorder = new AgentSessionTransitionRecorder(stats)
+    const leadDone = { state: 'done' as const, stateStartedAt: T + 10_000 }
+
+    recorder.onStatus(leadHook({ state: 'working', lead: LEAD_WORKING }, T))
+    recorder.onStatus(leadHook({ state: 'working', lead: leadDone }, T))
+    recorder.onStatus(
+      leadHook({ state: 'working', workingMode: 'monitoring', lead: leadDone }, T, {
+        receivedAt: T + 60_000
+      })
+    )
+
+    expect(stats.getSummary().totalAgentTimeMs).toBe(60_000)
+  })
+
+  it('opens a new session dated by the lead clock when the lead resumes after monitoring', () => {
+    const stats = new StatsCollector()
+    const recorder = new AgentSessionTransitionRecorder(stats)
+
+    recorder.onStatus(leadHook({ state: 'working', lead: LEAD_WORKING }, T))
+    recorder.onStatus(
+      leadHook(
+        {
+          state: 'working',
+          workingMode: 'monitoring',
+          lead: { state: 'done', stateStartedAt: T + 5_000 }
+        },
+        T,
+        { receivedAt: T + 5_000 }
+      )
+    )
+    // A task notification resumes the lead; the row's own clock never moved off T.
+    recorder.onStatus(
+      leadHook({ state: 'working', lead: { state: 'working', stateStartedAt: T + 300_000 } }, T)
+    )
+    recorder.onStatus(
+      leadHook({ state: 'done', lead: { state: 'done', stateStartedAt: T + 312_000 } }, T + 312_000)
+    )
+
+    expect(stats.getSummary().totalAgentsSpawned).toBe(2)
+    expect(stats.getSummary().totalAgentTimeMs).toBe(17_000)
+  })
+
+  it('never opens a session from a restored row whose lead reads working', () => {
+    const restored = sink()
+    new AgentSessionTransitionRecorder(restored).onStatus(
+      leadHook({ state: 'working', lead: LEAD_WORKING }, T, { restoredUnconfirmed: true })
+    )
+    expect(restored.onAgentStart).not.toHaveBeenCalled()
+
+    const replayed = sink()
+    new AgentSessionTransitionRecorder(replayed).onStatus(
+      leadHook({ state: 'working', lead: LEAD_WORKING }, T, { isReplay: true })
+    )
+    expect(replayed.onAgentStart).not.toHaveBeenCalled()
+  })
+
+  it("reads an old host's monitoring row exactly as before: working holds the session open", () => {
+    const stats = new StatsCollector()
+    const recorder = new AgentSessionTransitionRecorder(stats)
+
+    recorder.onStatus(hook('working', T))
+    recorder.onStatus(
+      hook('working', T, { payload: { state: 'working', workingMode: 'monitoring' } })
+    )
+    recorder.onStatus(hook('done', T + 40_000))
+
+    expect(stats.getSummary().totalAgentsSpawned).toBe(1)
+    expect(stats.getSummary().totalAgentTimeMs).toBe(40_000)
+  })
+})
+
 describe('classifyAgentSessionTransition', () => {
-  it('treats an unchanged state as a snapshot, never a transition', () => {
+  it('treats an unchanged answer as a snapshot, never a transition', () => {
     expect(
-      classifyAgentSessionTransition({ state: 'working', open: true }, hook('working', T))
+      classifyAgentSessionTransition({ executing: true, open: true }, hook('working', T))
     ).toBe('none')
-    expect(classifyAgentSessionTransition({ state: 'done', open: false }, hook('done', T))).toBe(
+    expect(classifyAgentSessionTransition({ executing: false, open: false }, hook('done', T))).toBe(
       'none'
     )
   })
@@ -229,10 +371,10 @@ describe('classifyAgentSessionTransition', () => {
   })
 
   it('closes only a session it opened', () => {
-    expect(classifyAgentSessionTransition({ state: 'working', open: true }, hook('done', T))).toBe(
+    expect(classifyAgentSessionTransition({ executing: true, open: true }, hook('done', T))).toBe(
       'stop'
     )
-    expect(classifyAgentSessionTransition({ state: 'working', open: false }, hook('done', T))).toBe(
+    expect(classifyAgentSessionTransition({ executing: true, open: false }, hook('done', T))).toBe(
       'none'
     )
   })

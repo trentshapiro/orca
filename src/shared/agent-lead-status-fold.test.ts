@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   continueAgentLeadStatus,
   foldAgentLeadStatus,
+  isAgentExecutionOwed,
   isAgentStatusHeldOpenByChildWork
 } from './agent-lead-status-fold'
 
@@ -59,6 +60,33 @@ describe('isAgentStatusHeldOpenByChildWork', () => {
     )
     // No lead fact means no claim: an old host's row is never read as child-held.
     expect(isAgentStatusHeldOpenByChildWork({ state: 'working' })).toBe(false)
+  })
+})
+
+describe('isAgentExecutionOwed', () => {
+  it('is owed while the lead itself works, whatever the row shows', () => {
+    expect(isAgentExecutionOwed({ state: 'working', lead: { state: 'working' } })).toBe(true)
+  })
+
+  it('is owed while a settled lead is held working by live agent child work', () => {
+    expect(isAgentExecutionOwed({ state: 'working', lead: { state: 'done' } })).toBe(true)
+  })
+
+  it('is not owed by a watch loop, a paused lead, or a settled row', () => {
+    expect(
+      isAgentExecutionOwed({ state: 'working', workingMode: 'monitoring', lead: { state: 'done' } })
+    ).toBe(false)
+    expect(isAgentExecutionOwed({ state: 'blocked', lead: { state: 'blocked' } })).toBe(false)
+    // A child's permission prompt while the lead is settled parks the row; nothing executes.
+    expect(isAgentExecutionOwed({ state: 'blocked', lead: { state: 'done' } })).toBe(false)
+    expect(isAgentExecutionOwed({ state: 'done', lead: { state: 'done' } })).toBe(false)
+  })
+
+  it("falls back to today's read of the combined state when an old host sends no lead", () => {
+    expect(isAgentExecutionOwed({ state: 'working' })).toBe(true)
+    // An old host's monitoring row read as working before `lead` existed; it still does.
+    expect(isAgentExecutionOwed({ state: 'working', workingMode: 'monitoring' })).toBe(true)
+    expect(isAgentExecutionOwed({ state: 'done' })).toBe(false)
   })
 })
 

@@ -61,6 +61,16 @@ export function setCodexLeadTurnState(
   return lead
 }
 
+/** Codex's own Stop carries no verdict, so a Stop that closes a turn the server already judged
+ *  (an inferred interrupt) keeps that judgement — the carry-forward the Claude lane applies at its
+ *  turn boundary. Any other root event starts a fresh turn and drops it. */
+export function codexLeadOutcomeAtEvent(
+  eventName: unknown,
+  previous: Pick<CodexLeadTurnState, 'outcome'> | undefined
+): CodexLeadTurnState['outcome'] {
+  return eventName === 'Stop' ? previous?.outcome : undefined
+}
+
 /** The `lead` fact a Codex row publishes. Its combined `state` still comes from
  *  `codexRosterEffectiveState`, whose waiting-child rule the shared fold cannot express yet;
  *  moving that combine onto the fold is a separate slice with its own story table. */
@@ -180,8 +190,10 @@ export function reconcileRemoteCodexState(
     }
     if (leadState) {
       const previousLead = state.codexLeadStateByPaneKey.get(paneKey)
+      const outcome = codexLeadOutcomeAtEvent(eventName, previousLead)
       setCodexLeadTurnState(state, paneKey, {
         state: leadState,
+        ...(outcome ? { outcome } : {}),
         model: payload.model ?? previousLead?.model
       })
     }
