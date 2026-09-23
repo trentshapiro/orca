@@ -222,17 +222,21 @@ the one child-work fact `lead` cannot express: whether a shell was running
 beside the child agents, which decides whether a settled lead may be seeded
 at hydrate.
 
-Two combining rules remain outside the shared fold and are named so a reader
-does not mistake them for drift:
+Every lane, Codex included, combines through the fold. A child blocked on a
+human is a fold input (`childWorkLiveness: 'waiting'`, derived from the child's
+own `waiting` or `blocked` state) and makes the row wait whatever the lead is
+doing, unless the lead is itself asking. Two known divergences remain, pinned
+by name in the parity table (`src/shared/agent-lead-status-parity.test.ts`) so
+a reader does not mistake them for drift:
 
-- Codex keeps `codexRosterEffectiveState` for its combined `state` (a waiting
-  child wins, a settled root with any live child reads `working`, never
-  monitoring) and publishes `lead` from its root record; moving that combine
-  onto the fold needs a waiting-child input the fold does not have yet.
 - A cancelled turn with a still-running shell reads `done` in the hook lane
-  and `monitoring` in the structured lane. The parity table in
-  `src/shared/agent-lead-status-parity.test.ts` pins this as a known
-  divergence; the cancel policy that removes it flips that row.
+  and `monitoring` in the structured lane; the cancel policy that removes it
+  flips that row.
+- The Claude hook lane records a child's permission wait by displacing the
+  lead record (`waitingAgentId`, `stateBeforeWait`), so its `lead.state` reads
+  `waiting` while the lead is really still working or done. The Codex lane
+  keeps the wait on the child, and its `lead` stays the root's own state.
+  Moving Claude onto the child fact flips its rows in that table.
 
 ## PR 1b: the runtime's retained row store is deleted
 

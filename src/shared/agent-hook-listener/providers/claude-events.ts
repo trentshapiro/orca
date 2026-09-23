@@ -1,4 +1,5 @@
 import type { ParsedAgentStatusPayload } from '../../agent-status-types'
+import { agentLeadTurnInterrupted } from '../../agent-lead-status-fold'
 import { isAskUserQuestionTool } from '../../agent-question-answered-intent'
 import { readClaudeBackgroundAgentTasks } from '../../claude-background-task-inventory'
 import {
@@ -17,7 +18,6 @@ import {
   normalizeClaudeSubagentLifecycleEvent
 } from './claude-lifecycle-events'
 import {
-  claudeLeadTurnInterrupted,
   getOrCreateClaudeSubagentRoster,
   resolveClaudePaneStatus,
   setClaudeLeadTurnState,
@@ -77,7 +77,7 @@ export function normalizeClaudeEvent(
   const interrupted =
     isTurnBoundary &&
     ((eventAgentId === undefined && hookPayload['is_interrupt'] === true) ||
-      claudeLeadTurnInterrupted(previousLead))
+      agentLeadTurnInterrupted(previousLead))
       ? true
       : undefined
   // Why: a verdict, never a guess — a plain Stop stays absent, so a cancel can never read as a
@@ -205,7 +205,7 @@ export function normalizeClaudeEvent(
     return buildClaudeStatusPayload(state, eventName, promptText, paneKey, hookPayload, {
       ...resolveClaudePaneStatus(state, paneKey, restored),
       updateToolSnapshot: true,
-      interrupted: claudeLeadTurnInterrupted(restored),
+      interrupted: agentLeadTurnInterrupted(restored),
       turnCompletedAt: restored.turnCompletedAt
     })
   }

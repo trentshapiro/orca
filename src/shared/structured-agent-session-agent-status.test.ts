@@ -39,11 +39,20 @@ describe('structuredAgentSessionAgentStatus', () => {
     ).toEqual({ state: 'working', workingMode: 'monitoring', lead: { state: 'done' } })
   })
 
-  it('keeps an idle lead working while a subagent is blocked or out of contact', () => {
-    for (const state of ['waiting', 'blocked', 'unverifiable'] as const) {
+  it('keeps an idle lead working while a subagent is out of contact', () => {
+    expect(
+      structuredAgentSessionAgentStatus({
+        status: 'idle',
+        backgroundTasks: [task({ state: 'unverifiable' })]
+      })
+    ).toEqual({ state: 'working', lead: { state: 'done' } })
+  })
+
+  it('reads an idle lead as waiting while a subagent needs a human', () => {
+    for (const state of ['waiting', 'blocked'] as const) {
       expect(
         structuredAgentSessionAgentStatus({ status: 'idle', backgroundTasks: [task({ state })] })
-      ).toEqual({ state: 'working', lead: { state: 'done' } })
+      ).toEqual({ state: 'waiting', lead: { state: 'done' } })
     }
   })
 

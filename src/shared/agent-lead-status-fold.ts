@@ -2,7 +2,8 @@ import type { AgentChildWorkLiveness } from './agent-status-child-work-liveness'
 import type { AgentLeadStatus, AgentStatusState, AgentWorkingMode } from './agent-status-types'
 
 export type AgentLeadStatusFoldInput = {
-  /** The lead's own turn state. Anything but `done` wins outright. */
+  /** The lead's own turn state. Anything but `done` wins over child work, except that a child
+   *  blocked on a human outranks a working lead. */
   leadState: AgentStatusState
   /** A lead turn that ended by interrupt keeps a watch loop from reading as monitoring;
    *  live agent work still counts, because it outlives the interrupt. */
@@ -15,13 +16,29 @@ export type AgentLeadStatusResolution = {
   workingMode?: AgentWorkingMode
 }
 
+/** A cancelled turn is the one verdict the display fold reads off the lead record. */
+export function agentLeadTurnInterrupted(
+  lead: Pick<AgentLeadStatus, 'outcome'> | undefined
+): boolean {
+  return lead?.outcome === 'cancellation'
+}
+
 /**
- * One fold for every lane that publishes a lead agent's status: a settled lead
- * with live agent work is still working, and a settled lead with only watch
- * loops is monitoring. The hook lane and the structured session lane derive
- * the liveness from different evidence, but the policy must not differ.
+ * One fold for every lane that publishes a lead agent's status: a child blocked
+ * on a human makes the row wait whatever the lead is doing, a settled lead with
+ * live agent work is still working, and a settled lead with only watch loops is
+ * monitoring. Every lane derives the liveness from its own evidence, but the
+ * policy must not differ.
  */
 export function foldAgentLeadStatus(input: AgentLeadStatusFoldInput): AgentLeadStatusResolution {
+  // The lead's own request for a human keeps its own vocabulary (`blocked` in the structured
+  // lane); a child's request surfaces only when the lead is not already asking.
+  if (input.leadState === 'waiting' || input.leadState === 'blocked') {
+    return { stateName: input.leadState }
+  }
+  if (input.childWorkLiveness === 'waiting') {
+    return { stateName: 'waiting' }
+  }
   if (input.leadState !== 'done') {
     return { stateName: input.leadState }
   }

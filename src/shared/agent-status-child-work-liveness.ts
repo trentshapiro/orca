@@ -1,8 +1,9 @@
 import type { AgentChildWorkKind, AgentChildWorkState } from './agent-status-child-work'
 
-/** Two-state vocabulary by design: any live agent work reads as `working`; `monitoring`
- *  only when shells and monitors are the sole live work; null when nothing runs. */
-export type AgentChildWorkLiveness = 'working' | 'monitoring' | null
+/** Three live arms by design, ranked: a child blocked on a human is `waiting`; otherwise any live
+ *  agent work reads as `working`; `monitoring` only when shells and monitors are the sole live
+ *  work; null when nothing runs. */
+export type AgentChildWorkLiveness = 'waiting' | 'working' | 'monitoring' | null
 
 export type AgentChildWorkLivenessCandidate = {
   kind: AgentChildWorkKind
@@ -10,6 +11,8 @@ export type AgentChildWorkLivenessCandidate = {
 }
 
 export type AgentChildWorkLivenessEvidence = {
+  /** A live child of any kind needs a human before it can go on. */
+  hasWaitingChildWork: boolean
   hasLiveAgentWork: boolean
   hasLiveNonAgentWork: boolean
 }
@@ -31,9 +34,18 @@ function isLiveChildWork(child: AgentChildWorkLivenessCandidate): boolean {
   return child.state !== 'done' && child.state !== 'idle'
 }
 
+/** The child-state vocabulary mirrors the row's: `waiting` and `blocked` both mean a human must
+ *  act. Lost contact (`unverifiable`) is not a request for one. */
+function isWaitingChildWork(child: AgentChildWorkLivenessCandidate): boolean {
+  return child.state === 'waiting' || child.state === 'blocked'
+}
+
 export function agentChildWorkLivenessFromEvidence(
   evidence: AgentChildWorkLivenessEvidence
 ): AgentChildWorkLiveness {
+  if (evidence.hasWaitingChildWork) {
+    return 'waiting'
+  }
   if (evidence.hasLiveAgentWork) {
     return 'working'
   }
@@ -43,14 +55,20 @@ export function agentChildWorkLivenessFromEvidence(
 export function agentChildWorkLiveness(
   children: readonly AgentChildWorkLivenessCandidate[] | undefined
 ): AgentChildWorkLiveness {
+  let hasWaitingChildWork = false
   let hasLiveAgentWork = false
   let hasLiveNonAgentWork = false
   for (const child of children ?? []) {
     if (!isLiveChildWork(child)) {
       continue
     }
+    hasWaitingChildWork ||= isWaitingChildWork(child)
     hasLiveAgentWork ||= isAgentChildWorkKind(child.kind)
     hasLiveNonAgentWork ||= !isAgentChildWorkKind(child.kind)
   }
-  return agentChildWorkLivenessFromEvidence({ hasLiveAgentWork, hasLiveNonAgentWork })
+  return agentChildWorkLivenessFromEvidence({
+    hasWaitingChildWork,
+    hasLiveAgentWork,
+    hasLiveNonAgentWork
+  })
 }

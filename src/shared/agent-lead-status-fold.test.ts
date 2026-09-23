@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentLeadTurnInterrupted,
   continueAgentLeadStatus,
   foldAgentLeadStatus,
   isAgentStatusHeldOpenByChildWork
@@ -45,6 +46,35 @@ describe('foldAgentLeadStatus', () => {
     expect(
       foldAgentLeadStatus({ leadState: 'done', interrupted: false, childWorkLiveness: null })
     ).toEqual({ stateName: 'done' })
+  })
+
+  describe('a child blocked on a human', () => {
+    it('makes a working or settled lead wait, even after an interrupt', () => {
+      for (const leadState of ['working', 'done'] as const) {
+        for (const interrupted of [false, true]) {
+          expect(
+            foldAgentLeadStatus({ leadState, interrupted, childWorkLiveness: 'waiting' })
+          ).toEqual({ stateName: 'waiting' })
+        }
+      }
+    })
+
+    it("yields to the lead's own request for a human, in the lead's own vocabulary", () => {
+      for (const leadState of ['waiting', 'blocked'] as const) {
+        expect(
+          foldAgentLeadStatus({ leadState, interrupted: false, childWorkLiveness: 'waiting' })
+        ).toEqual({ stateName: leadState })
+      }
+    })
+  })
+})
+
+describe('agentLeadTurnInterrupted', () => {
+  it('reads only a cancellation verdict as an interrupt', () => {
+    expect(agentLeadTurnInterrupted({ outcome: 'cancellation' })).toBe(true)
+    expect(agentLeadTurnInterrupted({ outcome: 'failure' })).toBe(false)
+    expect(agentLeadTurnInterrupted({})).toBe(false)
+    expect(agentLeadTurnInterrupted(undefined)).toBe(false)
   })
 })
 

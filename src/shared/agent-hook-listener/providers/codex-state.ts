@@ -1,7 +1,13 @@
 import type { AgentLeadStatus, ParsedAgentStatusPayload } from '../../agent-status-types'
-import { continueAgentLeadStatus } from '../../agent-lead-status-fold'
+import type { AgentJournalTurnOutcome } from '../../agent-turn-outcome'
 import {
-  codexRosterEffectiveState,
+  agentLeadTurnInterrupted,
+  continueAgentLeadStatus,
+  foldAgentLeadStatus,
+  type AgentLeadStatusResolution
+} from '../../agent-lead-status-fold'
+import {
+  codexRosterChildWorkLiveness,
   codexRosterToSnapshots,
   finishCodexSubagent,
   seedCodexSubagentRoster,
@@ -61,9 +67,32 @@ export function setCodexLeadTurnState(
   return lead
 }
 
-/** The `lead` fact a Codex row publishes. Its combined `state` still comes from
- *  `codexRosterEffectiveState`, whose waiting-child rule the shared fold cannot express yet;
- *  moving that combine onto the fold is a separate slice with its own story table. */
+/** The combined row state for a Codex pane: the root record and its roster through the same
+ *  fold every other lane uses. */
+export function resolveCodexPaneStatus(
+  state: HookListenerState,
+  paneKey: string,
+  lead: Pick<CodexLeadTurnState, 'state' | 'outcome'>
+): AgentLeadStatusResolution {
+  return foldAgentLeadStatus({
+    leadState: lead.state,
+    interrupted: agentLeadTurnInterrupted(lead),
+    childWorkLiveness: codexRosterChildWorkLiveness(state.codexSubagentRosterByPaneKey.get(paneKey))
+  })
+}
+
+/** Codex's own Stop carries no verdict, so a turn boundary that lands on a cancelled root keeps
+ *  the cancellation Orca inferred, as the Claude lane carries its inferred interrupt into the
+ *  late Stop. Any live event in between has already replaced the record and drops it. */
+export function codexCarriedTurnOutcome(
+  previous: Pick<CodexLeadTurnState, 'state' | 'outcome'> | undefined
+): AgentJournalTurnOutcome | undefined {
+  return previous?.state === 'done' && agentLeadTurnInterrupted(previous)
+    ? 'cancellation'
+    : undefined
+}
+
+/** The `lead` fact a Codex row publishes, straight from the root record. */
 export function codexLeadStatusForPayload(
   lead: CodexLeadTurnState | undefined
 ): AgentLeadStatus | undefined {
@@ -180,8 +209,10 @@ export function reconcileRemoteCodexState(
     }
     if (leadState) {
       const previousLead = state.codexLeadStateByPaneKey.get(paneKey)
+      const outcome = leadState === 'done' ? codexCarriedTurnOutcome(previousLead) : undefined
       setCodexLeadTurnState(state, paneKey, {
         state: leadState,
+        ...(outcome ? { outcome } : {}),
         model: payload.model ?? previousLead?.model
       })
     }
@@ -191,6 +222,7 @@ export function reconcileRemoteCodexState(
   if (!lead) {
     return payload
   }
+  const resolution = resolveCodexPaneStatus(state, paneKey, lead)
   // Child lifecycle hooks commonly omit the root prompt. Preserve the last known
   // turn label while merging their roster/state so relay restarts do not blank it.
   const prompt =
@@ -200,7 +232,8 @@ export function reconcileRemoteCodexState(
   return {
     ...payload,
     prompt,
-    state: codexRosterEffectiveState(roster, lead.state),
+    state: resolution.stateName,
+    workingMode: resolution.workingMode,
     model: lead.model ?? payload.model,
     subagents: codexRosterToSnapshots(roster),
     // Why: main's cache outlives a relay restart, so it is the lead fact for a relayed row too.

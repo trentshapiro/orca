@@ -4,6 +4,7 @@ import type {
   AgentWorkingMode
 } from '../../agent-status-types'
 import {
+  agentLeadTurnInterrupted,
   continueAgentLeadStatus,
   foldAgentLeadStatus,
   type AgentLeadStatusResolution
@@ -126,13 +127,6 @@ export function updateClaudeRunningNonAgentTask(
 
 export type ClaudePaneStatusResolution = AgentLeadStatusResolution
 
-/** A cancelled turn is the one verdict the display fold still reads. */
-export function claudeLeadTurnInterrupted(
-  lead: Pick<ClaudeLeadTurnState, 'outcome'> | undefined
-): boolean {
-  return lead?.outcome === 'cancellation'
-}
-
 /** The only writer of the lead record. The lead's clock keeps continuity across same-state
  *  writes; a caller restoring a stash passes the stashed instant and wins. */
 export function setClaudeLeadTurnState(
@@ -168,8 +162,11 @@ export function resolveClaudePaneStatus(
 ): ClaudePaneStatusResolution {
   return foldAgentLeadStatus({
     leadState: lead.state,
-    interrupted: claudeLeadTurnInterrupted(lead),
+    interrupted: agentLeadTurnInterrupted(lead),
     childWorkLiveness: agentChildWorkLivenessFromEvidence({
+      // A child's permission wait displaces the lead record itself (`waitingAgentId`,
+      // `stateBeforeWait`) instead of living on the roster, so the roster never carries one.
+      hasWaitingChildWork: false,
       hasLiveAgentWork: claudeRosterHasWorkingSubagent(
         state.claudeSubagentRosterByPaneKey.get(paneKey)
       ),
@@ -320,7 +317,7 @@ export function clearClaudeAnsweredQuestionWait(
   return {
     state: resolved.stateName,
     ...(resolved.workingMode ? { workingMode: resolved.workingMode } : {}),
-    ...(claudeLeadTurnInterrupted(restored) ? { interrupted: true as const } : {}),
+    ...(agentLeadTurnInterrupted(restored) ? { interrupted: true as const } : {}),
     ...(restored.turnCompletedAt !== undefined
       ? { turnCompletedAt: restored.turnCompletedAt }
       : {}),

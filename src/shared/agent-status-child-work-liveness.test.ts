@@ -12,15 +12,34 @@ function child(
 }
 
 describe('agentChildWorkLivenessFromEvidence', () => {
-  it('lets live agent work outrank live watch loops', () => {
+  it('ranks a waiting child above live agent work, and that above live watch loops', () => {
     expect(
-      agentChildWorkLivenessFromEvidence({ hasLiveAgentWork: true, hasLiveNonAgentWork: true })
+      agentChildWorkLivenessFromEvidence({
+        hasWaitingChildWork: true,
+        hasLiveAgentWork: true,
+        hasLiveNonAgentWork: true
+      })
+    ).toBe('waiting')
+    expect(
+      agentChildWorkLivenessFromEvidence({
+        hasWaitingChildWork: false,
+        hasLiveAgentWork: true,
+        hasLiveNonAgentWork: true
+      })
     ).toBe('working')
     expect(
-      agentChildWorkLivenessFromEvidence({ hasLiveAgentWork: false, hasLiveNonAgentWork: true })
+      agentChildWorkLivenessFromEvidence({
+        hasWaitingChildWork: false,
+        hasLiveAgentWork: false,
+        hasLiveNonAgentWork: true
+      })
     ).toBe('monitoring')
     expect(
-      agentChildWorkLivenessFromEvidence({ hasLiveAgentWork: false, hasLiveNonAgentWork: false })
+      agentChildWorkLivenessFromEvidence({
+        hasWaitingChildWork: false,
+        hasLiveAgentWork: false,
+        hasLiveNonAgentWork: false
+      })
     ).toBeNull()
   })
 })
@@ -42,11 +61,25 @@ describe('agentChildWorkLiveness', () => {
     )
   })
 
-  it('keeps a waiting, blocked or unverifiable agent live, the way a shell in those states is', () => {
-    for (const state of ['waiting', 'blocked', 'unverifiable'] as const) {
-      expect(agentChildWorkLiveness([child({ state })])).toBe('working')
-      expect(agentChildWorkLiveness([child({ kind: 'command', state })])).toBe('monitoring')
+  it('keeps an unverifiable agent live, the way a shell out of contact is', () => {
+    expect(agentChildWorkLiveness([child({ state: 'unverifiable' })])).toBe('working')
+    expect(agentChildWorkLiveness([child({ kind: 'command', state: 'unverifiable' })])).toBe(
+      'monitoring'
+    )
+  })
+
+  it('reads a child of any kind that needs a human as waiting, above every other live child', () => {
+    for (const state of ['waiting', 'blocked'] as const) {
+      expect(agentChildWorkLiveness([child({ state })])).toBe('waiting')
+      expect(agentChildWorkLiveness([child({ kind: 'command', state })])).toBe('waiting')
+      expect(agentChildWorkLiveness([child(), child({ kind: 'command' }), child({ state })])).toBe(
+        'waiting'
+      )
     }
+  })
+
+  it('does not read a settled child as waiting whatever it was doing before', () => {
+    expect(agentChildWorkLiveness([child({ state: 'done' })])).toBeNull()
   })
 
   it('retires an agent only on an explicitly settled state', () => {
