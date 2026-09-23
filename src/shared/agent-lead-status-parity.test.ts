@@ -4,6 +4,7 @@
 // differently is caught here structurally, not by review.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { normalizeHookPayload } from './agent-hook-listener'
+import { markClaudeLeadTurnInterrupted } from './agent-hook-listener/providers/claude-roster-state'
 import {
   createHookListenerState,
   type HookListenerState
@@ -33,6 +34,8 @@ type Published = {
 }
 
 const RUNNING_SHELL = { id: 'shell-1', type: 'shell', status: 'running' }
+/** Not a hook: current Claude sends none on a cancel, so Orca infers it from the keystroke. */
+const ORCA_INFERRED_INTERRUPT = { orca_inferred_interrupt: true }
 const RUNNING_AGENT = { id: 'agent-1', type: 'subagent', status: 'running' }
 const AGENT_TASK: AgentSessionBackgroundTask = { id: 'agent-1', kind: 'agent', state: 'working' }
 const SHELL_TASK: AgentSessionBackgroundTask = { id: 'shell-1', kind: 'command', state: 'working' }
@@ -209,12 +212,14 @@ const STORIES: Story[] = [
     // KNOWN DIVERGENCE, pinned on purpose. The hook lane hides a still-running shell after an
     // interrupted turn; the structured lane never feeds the verdict into the fold and keeps
     // showing the shell. The cancel policy (PR C) flips the hook-lane rows to monitoring and
-    // must update this story, not delete it.
+    // must update this story, not delete it. The Claude row here is the primary path: Orca's
+    // inferred cancel, carried by the lead record into the next Stop, which lists the shell.
     name: 'interrupted with a watch loop (known divergence: CLI done / structured monitoring)',
     claude: {
       events: [
         { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
-        { hook_event_name: 'Stop', is_interrupt: true, background_tasks: [RUNNING_SHELL] }
+        ORCA_INFERRED_INTERRUPT,
+        { hook_event_name: 'Stop', background_tasks: [RUNNING_SHELL] }
       ],
       expect: { state: 'done', lead: { state: 'done', outcome: 'cancellation' } }
     },
@@ -232,6 +237,17 @@ const STORIES: Story[] = [
       events: [
         { hookEventName: 'user_prompt_submit', prompt: 'go' },
         { hookEventName: 'stop_cancelled', backgroundTasks: [RUNNING_SHELL] }
+      ],
+      expect: { state: 'done', lead: { state: 'done', outcome: 'cancellation' } }
+    }
+  },
+  {
+    // Secondary source: a build that does send `is_interrupt` on its Stop. Same known divergence.
+    name: 'interrupted by a Stop that carries is_interrupt, with a watch loop (older builds)',
+    claude: {
+      events: [
+        { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+        { hook_event_name: 'Stop', is_interrupt: true, background_tasks: [RUNNING_SHELL] }
       ],
       expect: { state: 'done', lead: { state: 'done', outcome: 'cancellation' } }
     }
@@ -273,6 +289,10 @@ describe('lead status parity across lanes', () => {
   ): ParsedAgentStatusPayload {
     let last: ParsedAgentStatusPayload | null = null
     for (const payload of events) {
+      if (payload === ORCA_INFERRED_INTERRUPT) {
+        markClaudeLeadTurnInterrupted(state, PANE_KEY)
+        continue
+      }
       const event = normalizeHookPayload(
         state,
         source,

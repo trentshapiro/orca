@@ -4,6 +4,7 @@ import {
   type HookListenerState
 } from './agent-hook-listener/listener-state'
 import { normalizeHookPayload } from './agent-hook-listener'
+import { markClaudeLeadTurnInterrupted } from './agent-hook-listener/providers/claude-roster-state'
 import { clearGrokSessionPathLookupCacheForTests } from './grok-session-paths'
 import {
   CLAUDE_PREVIOUS_PROMPT_ID,
@@ -448,6 +449,38 @@ describe('the lead verdict across a child-induced wait', () => {
     expect(claude({ hook_event_name: 'UserPromptSubmit', prompt: 'again' })?.lead).toEqual({
       state: 'working',
       stateStartedAt: expect.any(Number)
+    })
+  })
+})
+
+describe('the lead verdict from an inferred interrupt', () => {
+  let state: HookListenerState
+
+  beforeEach(() => {
+    state = createHookListenerState()
+  })
+
+  function claude(payload: Record<string, unknown>) {
+    return normalizeHookPayload(state, 'claude', { paneKey: PANE_KEY, payload }, 'production')
+      ?.payload
+  }
+
+  // Current Claude sends no hook on a cancel and no `is_interrupt` on Stop, so the cancellation
+  // enters the lead record from Orca's inferred interrupt and rides into the next real Stop.
+  it('carries the inferred cancellation into the next plain Stop', () => {
+    claude({ hook_event_name: 'UserPromptSubmit', prompt: 'go' })
+    markClaudeLeadTurnInterrupted(state, PANE_KEY)
+    expect(state.claudeLeadStateByPaneKey.get(PANE_KEY)).toMatchObject({
+      state: 'done',
+      outcome: 'cancellation'
+    })
+    const settledAt = state.claudeLeadStateByPaneKey.get(PANE_KEY)?.stateStartedAt
+
+    const stop = claude({ hook_event_name: 'Stop' })
+    expect(stop).toMatchObject({
+      state: 'done',
+      interrupted: true,
+      lead: { state: 'done', outcome: 'cancellation', stateStartedAt: settledAt }
     })
   })
 })

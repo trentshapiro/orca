@@ -206,6 +206,11 @@ the row's child evidence instead of stored. `outcome` is the provider's verdict
 on the lead's most recent finished turn, present only while `lead.state` is
 `done`; a plain end of turn carries none, because absent means unknown and a
 provider that omits its interrupt flag must not turn a cancel into a success.
+In the Claude hook lane the cancellation comes primarily from Orca's own
+inferred interrupt (`markClaudeLeadTurnInterrupted`), because current Claude
+sends no hook at all on a cancel and no `is_interrupt` on Stop; that flag on a
+turn boundary remains a secondary source for builds that send it, and
+`StopFailure` maps to `failure`.
 
 Admission is one function, `normalizeAgentStatusPayload`, on the relay wire,
 IPC and disk. A malformed `lead` drops the field and keeps the row. Old hosts

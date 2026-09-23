@@ -80,8 +80,11 @@ export function normalizeClaudeEvent(
       claudeLeadTurnInterrupted(previousLead))
       ? true
       : undefined
-  // Why: the provider's verdict, never inferred — a plain Stop stays absent, because an older
-  // Claude that omits `is_interrupt` would otherwise turn a cancel into a false success.
+  // Why: a verdict, never a guess — a plain Stop stays absent, so a cancel can never read as a
+  // success. Current Claude sends NO hook on a cancel and no `is_interrupt` on Stop, so the
+  // cancellation normally arrives through Orca's own inferred interrupt
+  // (`markClaudeLeadTurnInterrupted`) and is carried forward here; `is_interrupt` on a turn
+  // boundary is kept as the secondary source for builds that do send it.
   const outcome = interrupted
     ? ('cancellation' as const)
     : isTurnBoundary && eventName === 'StopFailure'
