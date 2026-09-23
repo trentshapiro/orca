@@ -35,6 +35,10 @@ export function isNewTurnEvent(source: AgentHookSource, eventName: unknown): boo
     case 'muse':
       // Muse uses Claude-compatible lifecycle events.
       return eventName === 'UserPromptSubmit'
+    case 'zcode':
+      // Why: ZCode's SessionStart lands an idle boundary row, and its own `compact` source is
+      // filtered upstream, so UserPromptSubmit is the only real new-turn boundary left.
+      return eventName === 'SessionStart' || eventName === 'UserPromptSubmit'
     case 'codex':
       return eventName === 'SessionStart' || eventName === 'UserPromptSubmit'
     case 'gemini':
@@ -137,6 +141,9 @@ export function extractToolFields(
     // Muse uses Claude-compatible tool fields.
     // falls through
     case 'muse':
+    // Why: ZCode's hook runner writes Claude's `tool_name`/`tool_input`/`tool_response` aliases.
+    // falls through
+    case 'zcode':
       return extractClaudeToolFields(eventName, hookPayload)
     case 'codex':
       return extractCodexToolFields(eventName, hookPayload)
