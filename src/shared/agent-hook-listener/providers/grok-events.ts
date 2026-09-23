@@ -105,10 +105,10 @@ function grokHasRunningFiniteTask(hookPayload: Record<string, unknown>): boolean
   })
 }
 
-/** What a plain `stop` leaves running behind the lead. Grok reports its finite tasks without a
+/** What a turn end leaves running behind the lead. Grok reports its finite tasks without a
  *  kind the roster could classify as agent work, and a still-active stop hook holds the turn the
  *  same way, so both read as watch work: the pane stays `working` in monitoring mode. */
-function grokChildWorkLivenessAfterStop(
+function grokChildWorkLivenessAfterTurnEnd(
   hookPayload: Record<string, unknown>
 ): AgentChildWorkLiveness {
   const stopHookActive = aliasedField(hookPayload, 'stopHookActive', 'stop_hook_active')
@@ -206,15 +206,14 @@ export function normalizeGrokEvent(
     : isGrokEvent(eventName, 'stop_failure')
       ? ('failure' as const)
       : undefined
-  // Only a plain end-of-turn `stop` reports what it left running; a cancel, a failure and a
-  // session boundary settle the pane whatever the inventory says, as they always have.
+  // Why: every turn end reports what it left running, and a task leaves only when it reports its
+  // own end or the session ends — a cancelled or failed turn with a still-running task reads
+  // monitoring exactly like a plain `stop`. Only a session boundary settles the pane whatever
+  // the inventory says.
   const resolution = foldAgentLeadStatus({
     leadState,
-    interrupted: outcome === 'cancellation',
     childWorkLiveness:
-      isGrokEvent(eventName, 'stop') && !sessionBoundary
-        ? grokChildWorkLivenessAfterStop(hookPayload)
-        : null
+      isTurnEnd && !sessionBoundary ? grokChildWorkLivenessAfterTurnEnd(hookPayload) : null
   })
   const stateName = resolution.stateName
   const lead = continueAgentLeadStatus(

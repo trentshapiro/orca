@@ -145,7 +145,9 @@ describe('AgentHookServer listener replay', () => {
     }
   })
 
-  it('does not infer an interrupt while Claude reports a background shell', () => {
+  it('does not infer an interrupt while Claude reports a background shell and the row carries no lead fact', () => {
+    // Why: a row from a host too old to publish `lead` cannot say whether its `working` is the
+    // lead's own turn or a shell holding an idle lead open, so the evidence guard stays for it.
     vi.useFakeTimers()
     vi.setSystemTime(1_000)
     try {
@@ -199,6 +201,146 @@ describe('AgentHookServer listener replay', () => {
           intent: 'ctrl-c'
         })
       ).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('infers a cancel of a live Claude lead turn and keeps the shell it leaves running as monitoring', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const server = new AgentHookServer()
+      server.ingestRemote(
+        {
+          paneKey: PANE,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          claudeRunningNonAgentTask: true,
+          payload: {
+            state: 'working',
+            prompt: 'run in background',
+            agentType: 'claude',
+            lead: { state: 'working', stateStartedAt: 900 }
+          }
+        },
+        'conn-1'
+      )
+      const baseline = server.getStatusSnapshot()[0]
+
+      vi.setSystemTime(1_500)
+      expect(
+        server.inferInterrupt({
+          paneKey: PANE,
+          baselineUpdatedAt: baseline.receivedAt,
+          baselineStateStartedAt: baseline.stateStartedAt,
+          baselinePrompt: 'run in background',
+          baselineAgentType: 'claude',
+          intent: 'ctrl-c'
+        })
+      ).toBe(true)
+      // Why: Ctrl+C ended the lead's turn, not the shell the inventory reported. The synthesized
+      // row is the fold of the cancelled lead with that shell, so it monitors; the verdict rides
+      // `lead.outcome`, and `interrupted` is a done-row flag the normalizer keeps off it.
+      const inferred = server.getStatusSnapshot()[0]
+      expect(inferred).toMatchObject({
+        state: 'working',
+        workingMode: 'monitoring',
+        lead: { state: 'done', outcome: 'cancellation', stateStartedAt: 1_500 }
+      })
+      expect(inferred.interrupted).toBeUndefined()
+      expect(server._getStateForTests().claudeRunningNonAgentTaskPaneKeys.has(PANE)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('infers a cancel of a live Claude lead turn beside a working subagent and keeps the row working', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const server = new AgentHookServer()
+      server.ingestRemote(
+        {
+          paneKey: PANE,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          payload: {
+            state: 'working',
+            prompt: 'delegate',
+            agentType: 'claude',
+            subagents: [{ id: 'a1', state: 'working', startedAt: 900 }],
+            lead: { state: 'working', stateStartedAt: 900 }
+          }
+        },
+        'conn-1'
+      )
+      const baseline = server.getStatusSnapshot()[0]
+
+      vi.setSystemTime(1_500)
+      expect(
+        server.inferInterrupt({
+          paneKey: PANE,
+          baselineUpdatedAt: baseline.receivedAt,
+          baselineStateStartedAt: baseline.stateStartedAt,
+          baselinePrompt: 'delegate',
+          baselineAgentType: 'claude',
+          intent: 'ctrl-c'
+        })
+      ).toBe(true)
+      // Why: the child outlives the cancel (a relayed pane has no local roster, so the row's own
+      // snapshots are the evidence); the lead's verdict is recorded without retiring the child.
+      expect(server.getStatusSnapshot()[0]).toMatchObject({
+        state: 'working',
+        subagents: [{ id: 'a1', state: 'working' }],
+        lead: { state: 'done', outcome: 'cancellation' }
+      })
+      expect(server.getStatusSnapshot()[0].workingMode).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not infer a cancel at the idle prompt of a Claude row held open by child work', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const server = new AgentHookServer()
+      server.ingestRemote(
+        {
+          paneKey: PANE,
+          tabId: 'tab-1',
+          worktreeId: 'wt-1',
+          claudeRunningNonAgentTask: true,
+          payload: {
+            state: 'working',
+            workingMode: 'monitoring',
+            prompt: 'run in background',
+            agentType: 'claude',
+            lead: { state: 'done', stateStartedAt: 900 }
+          }
+        },
+        'conn-1'
+      )
+      const baseline = server.getStatusSnapshot()[0]
+
+      vi.setSystemTime(1_500)
+      // Why: the lead is already settled; Ctrl+C at its prompt stops nothing the row shows.
+      expect(
+        server.inferInterrupt({
+          paneKey: PANE,
+          baselineUpdatedAt: baseline.receivedAt,
+          baselineStateStartedAt: baseline.stateStartedAt,
+          baselinePrompt: 'run in background',
+          baselineAgentType: 'claude',
+          intent: 'ctrl-c'
+        })
+      ).toBe(false)
+      expect(server.getStatusSnapshot()[0]).toMatchObject({
+        state: 'working',
+        workingMode: 'monitoring',
+        lead: { state: 'done' }
+      })
     } finally {
       vi.useRealTimers()
     }

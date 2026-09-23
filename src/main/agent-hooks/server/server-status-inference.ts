@@ -76,25 +76,30 @@ export abstract class AgentHookServerStatusInference extends AgentHookServerRowO
     if (isNavigationEscapeIntent(agentType, request.intent)) {
       return false
     }
-    // Why: a 'working' pane can be child-driven; Ctrl+C doesn't stop background children, so inferring done would retire live child rows.
-    if (payload.subagents?.some((subagent) => subagent.state !== 'idle')) {
+    const childWorkEvidenced =
+      payload.subagents?.some((subagent) => subagent.state !== 'idle') === true ||
+      (agentType === 'claude' &&
+        (this.state.claudeRunningNonAgentTaskPaneKeys.has(existing.paneKey) ||
+          this.state.claudeActiveSessionCronPaneKeys.has(existing.paneKey)))
+    // Why: a 'working' pane can be child-driven. For a Claude row the lead fact decides: Ctrl+C at
+    // the idle prompt of a row held open by a shell, cron or subagent cancels nothing, while a
+    // cancel of a live lead turn is folded with the child work it leaves running, exactly as a
+    // Stop would be. A row from a host too old to publish `lead`, and every other provider (whose
+    // combine does not run through the fold here), keeps the evidence guard: Ctrl+C does not stop
+    // background children, so inferring `done` there would retire live child rows.
+    const cancelledLeadFolds = agentType === 'claude' && payload.lead !== undefined
+    if (cancelledLeadFolds ? payload.lead?.state !== 'working' : childWorkEvidenced) {
       return false
     }
-    // Why: Escape/Ctrl+C at Claude's idle prompt does not stop provider-owned shells or session crons.
-    if (
-      agentType === 'claude' &&
-      (this.state.claudeRunningNonAgentTaskPaneKeys.has(existing.paneKey) ||
-        this.state.claudeActiveSessionCronPaneKeys.has(existing.paneKey))
-    ) {
-      return false
-    }
-    // Why: keep the Claude lead-turn record in sync, or a later child event re-emits the stale 'working' state and resurrects the cancelled pane.
-    if (agentType === 'claude') {
-      markClaudeLeadTurnInterrupted(this.state, existing.paneKey)
-    }
+    // Why: keep the provider's lead-turn record in sync, or a later child event re-emits the stale
+    // 'working' state and resurrects the cancelled pane.
+    const folded = cancelledLeadFolds
+      ? markClaudeLeadTurnInterrupted(this.state, existing.paneKey, payload)
+      : undefined
     if (agentType === 'codex') {
       markCodexLeadTurnInterrupted(this.state, existing.paneKey)
     }
+    const state = folded?.state ?? 'done'
     const inferred = this.applyNormalizedStatus({
       paneKey: existing.paneKey,
       tabId: existing.tabId,
@@ -102,15 +107,18 @@ export abstract class AgentHookServerStatusInference extends AgentHookServerRowO
       connectionId: existing.connectionId,
       providerSession: existing.providerSession,
       payload: {
-        state: 'done',
+        state,
+        ...(folded?.workingMode ? { workingMode: folded.workingMode } : {}),
         prompt: payload.prompt,
         agentType,
         ...(payload.model ? { model: payload.model } : {}),
-        interrupted: true,
+        // Why: `interrupted` is the settled row's restatement of the verdict for readers that
+        // predate `lead`; a row the cancel left monitoring carries it on `lead.outcome` only.
+        ...(state === 'done' ? { interrupted: true } : {}),
         // Why: idle children are display state; dropping them on an inferred interrupt blanks rows a later hook would restore.
         ...(payload.subagents ? { subagents: payload.subagents } : {}),
         // Why: the synthesized row is the lead's own end; its verdict is the interrupt that produced it.
-        lead: { state: 'done', outcome: 'cancellation', stateStartedAt: Date.now() }
+        lead: folded?.lead ?? { state: 'done', outcome: 'cancellation', stateStartedAt: Date.now() }
       }
     })
     if (!inferred) {

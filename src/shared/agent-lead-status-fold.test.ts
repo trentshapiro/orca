@@ -7,44 +7,39 @@ import {
 
 describe('foldAgentLeadStatus', () => {
   it('keeps a lead that is not settled, whatever its children do', () => {
-    expect(
-      foldAgentLeadStatus({
-        leadState: 'blocked',
-        interrupted: false,
-        childWorkLiveness: 'working'
-      })
-    ).toEqual({ stateName: 'blocked' })
+    expect(foldAgentLeadStatus({ leadState: 'blocked', childWorkLiveness: 'working' })).toEqual({
+      stateName: 'blocked'
+    })
   })
 
   it('reads a settled lead with live agent work as working', () => {
-    expect(
-      foldAgentLeadStatus({ leadState: 'done', interrupted: false, childWorkLiveness: 'working' })
-    ).toEqual({ stateName: 'working' })
+    expect(foldAgentLeadStatus({ leadState: 'done', childWorkLiveness: 'working' })).toEqual({
+      stateName: 'working'
+    })
   })
 
   it('reads a settled lead with only watch loops as monitoring', () => {
-    expect(
-      foldAgentLeadStatus({
-        leadState: 'done',
-        interrupted: false,
-        childWorkLiveness: 'monitoring'
-      })
-    ).toEqual({ stateName: 'working', workingMode: 'monitoring' })
+    expect(foldAgentLeadStatus({ leadState: 'done', childWorkLiveness: 'monitoring' })).toEqual({
+      stateName: 'working',
+      workingMode: 'monitoring'
+    })
   })
 
-  it('does not read a watch loop as monitoring after an interrupt, but keeps agent work', () => {
-    expect(
-      foldAgentLeadStatus({ leadState: 'done', interrupted: true, childWorkLiveness: 'monitoring' })
-    ).toEqual({ stateName: 'done' })
-    expect(
-      foldAgentLeadStatus({ leadState: 'done', interrupted: true, childWorkLiveness: 'working' })
-    ).toEqual({ stateName: 'working' })
+  it("takes no verdict: how the lead's turn ended is not a fold input", () => {
+    // A cancel is a fact about the lead, carried on `lead.outcome`; the work it left running
+    // reads exactly as it would after a plain end of turn.
+    const input: Parameters<typeof foldAgentLeadStatus>[0] = {
+      leadState: 'done',
+      childWorkLiveness: 'monitoring'
+    }
+    expect(Object.keys(input)).toEqual(['leadState', 'childWorkLiveness'])
+    expect(foldAgentLeadStatus(input)).toEqual({ stateName: 'working', workingMode: 'monitoring' })
   })
 
   it('settles when nothing is running', () => {
-    expect(
-      foldAgentLeadStatus({ leadState: 'done', interrupted: false, childWorkLiveness: null })
-    ).toEqual({ stateName: 'done' })
+    expect(foldAgentLeadStatus({ leadState: 'done', childWorkLiveness: null })).toEqual({
+      stateName: 'done'
+    })
   })
 })
 

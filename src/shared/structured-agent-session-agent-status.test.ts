@@ -80,7 +80,7 @@ describe('structuredAgentSessionAgentStatus', () => {
   })
 
   // The verdict is a fact about a finished turn; the fold never reads it, so a cancelled turn with
-  // a watch loop still reads monitoring here (the hook lane's known divergence, until PR C).
+  // a watch loop reads monitoring, as it does in the hook lane.
   it('carries the turn verdict on the lead only while the lead is done', () => {
     expect(
       structuredAgentSessionAgentStatus({ status: 'idle', turnOutcome: 'cancellation' })

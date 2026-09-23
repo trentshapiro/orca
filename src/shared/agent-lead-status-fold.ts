@@ -4,9 +4,6 @@ import type { AgentLeadStatus, AgentStatusState, AgentWorkingMode } from './agen
 export type AgentLeadStatusFoldInput = {
   /** The lead's own turn state. Anything but `done` wins outright. */
   leadState: AgentStatusState
-  /** A lead turn that ended by interrupt keeps a watch loop from reading as monitoring;
-   *  live agent work still counts, because it outlives the interrupt. */
-  interrupted: boolean
   childWorkLiveness: AgentChildWorkLiveness
 }
 
@@ -20,6 +17,10 @@ export type AgentLeadStatusResolution = {
  * with live agent work is still working, and a settled lead with only watch
  * loops is monitoring. The hook lane and the structured session lane derive
  * the liveness from different evidence, but the policy must not differ.
+ *
+ * How the lead's turn ended is not an input. A cancel is a verdict on the lead
+ * (`lead.outcome`), never on the shell or subagent it left running: that work
+ * leaves the fold only when it reports its own end or the session ends.
  */
 export function foldAgentLeadStatus(input: AgentLeadStatusFoldInput): AgentLeadStatusResolution {
   if (input.leadState !== 'done') {
@@ -28,7 +29,7 @@ export function foldAgentLeadStatus(input: AgentLeadStatusFoldInput): AgentLeadS
   if (input.childWorkLiveness === 'working') {
     return { stateName: 'working' }
   }
-  if (input.childWorkLiveness === 'monitoring' && !input.interrupted) {
+  if (input.childWorkLiveness === 'monitoring') {
     return { stateName: 'working', workingMode: 'monitoring' }
   }
   return { stateName: 'done' }
